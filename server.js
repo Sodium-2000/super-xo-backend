@@ -75,9 +75,46 @@ function handleMessage(ws, message) {
         case 'LEAVE_ROOM':
             handleLeaveRoom(ws);
             break;
+        case 'CHECK_ROOM':
+            handleCheckRoom(ws, payload);
+            break;
         default:
             sendError(ws, `Unknown message type: ${type}`);
     }
+}
+
+function handleCheckRoom(ws, payload) {
+    const { roomCode, playerId } = payload;
+    
+    if (!roomCode || !playerId) {
+        sendError(ws, 'Missing roomCode or playerId');
+        return;
+    }
+    
+    // Find room by code
+    const room = Array.from(rooms.values()).find(r => r.code === roomCode);
+    
+    if (!room) {
+        send(ws, {
+            type: 'ROOM_CHECK_RESULT',
+            payload: { exists: false },
+        });
+        return;
+    }
+    
+    // Check if player was in this room
+    const wasInRoom = room.playerIds.includes(playerId);
+    const hasOpponent = room.players.some(p => p !== null && players.get(p)?.playerId !== playerId);
+    
+    send(ws, {
+        type: 'ROOM_CHECK_RESULT',
+        payload: {
+            exists: true,
+            wasInRoom,
+            hasOpponent,
+            canReconnect: wasInRoom && hasOpponent,
+        },
+    });
 } function handleCreateRoom(ws, payload) {
     const roomCode = generateRoomCode();
     const roomId = uuidv4();
@@ -146,14 +183,14 @@ function handleJoinRoom(ws, payload) {
 
     // Count active players (non-null slots)
     const activePlayers = room.players.filter(p => p !== null).length;
-    
+
     if (activePlayers >= 2) {
         sendError(ws, 'Room is full');
         return;
     }
 
     const playerId = uuidv4();
-    
+
     // If there's a null slot (disconnected player), replace it
     const disconnectedIndex = room.players.indexOf(null);
     if (disconnectedIndex !== -1) {
@@ -168,7 +205,7 @@ function handleJoinRoom(ws, payload) {
         room.playerSymbols[playerId] = 'o';
         players.set(ws, { playerId, roomId: room.id, playerSymbol: 'o' });
     }
-    
+
     room.lastActivity = Date.now();
 
     // Clear the incomplete room timeout since game is now full
@@ -340,25 +377,62 @@ function handleRestartGame(ws, payload) {
         return;
     }
 
-    // Reset game state
-    room.gameState = createInitialGameState();
-    room.currentTurn = 'x';
-    room.activeBoard = -1;
-    room.lastActivity = Date.now();
+    // Prevent rapid restart requests (debounce)
+    const now = Date.now();
+    if (room.lastRestart && (now - room.lastRestart) < 1000) {
+        console.log(`Ignoring rapid restart request in room ${room.code}`);
+        return;
+    }
+    room.lastRestart = now;
 
-    // Notify all players
-    room.players.forEach((playerWs) => {
-        send(playerWs, {
-            type: 'GAME_RESTARTED',
-            payload: {
-                gameState: room.gameState,
-                currentTurn: room.currentTurn,
-                activeBoard: room.activeBoard,
-            },
+    // Initialize restart approval tracking
+    if (!room.restartApprovals) {
+        room.restartApprovals = new Set();
+    }
+
+    // Add this player's approval
+    room.restartApprovals.add(playerInfo.playerId);
+
+    const activePlayers = room.players.filter(p => p !== null).length;
+    
+    // If both players approved (or only one player in room), restart
+    if (room.restartApprovals.size >= activePlayers) {
+        // Reset game state
+        room.gameState = createInitialGameState();
+        room.currentTurn = 'x';
+        room.activeBoard = -1;
+        room.lastActivity = Date.now();
+        room.restartApprovals.clear();
+
+        // Notify all active players (skip null)
+        room.players.forEach((playerWs) => {
+            if (playerWs !== null) {
+                send(playerWs, {
+                    type: 'GAME_RESTARTED',
+                    payload: {
+                        gameState: room.gameState,
+                        currentTurn: room.currentTurn,
+                        activeBoard: room.activeBoard,
+                    },
+                });
+            }
         });
-    });
 
-    console.log(`Game restarted in room ${room.code}`);
+        console.log(`Game restarted in room ${room.code}`);
+    } else {
+        // Notify other players that this player wants to restart
+        room.players.forEach((playerWs) => {
+            if (playerWs !== null && playerWs !== ws) {
+                send(playerWs, {
+                    type: 'RESTART_REQUESTED',
+                    payload: {
+                        message: 'Opponent wants to restart',
+                    },
+                });
+            }
+        });
+        console.log(`Restart requested in room ${room.code} (${room.restartApprovals.size}/${activePlayers})`);
+    }
 }
 
 function handleLeaveRoom(ws) {
@@ -369,6 +443,11 @@ function handleLeaveRoom(ws) {
     if (room) {
         // Remove from disconnected players if present
         disconnectedPlayers.delete(playerInfo.playerId);
+        
+        // Clear restart approvals
+        if (room.restartApprovals) {
+            room.restartApprovals.delete(playerInfo.playerId);
+        }
 
         // Notify other players
         room.players.forEach((playerWs) => {

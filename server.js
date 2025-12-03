@@ -144,18 +144,32 @@ function handleJoinRoom(ws, payload) {
         return;
     }
 
-    if (room.players.length >= 2) {
+    // Count active players (non-null slots)
+    const activePlayers = room.players.filter(p => p !== null).length;
+    
+    if (activePlayers >= 2) {
         sendError(ws, 'Room is full');
         return;
     }
 
     const playerId = uuidv4();
-    room.players.push(ws);
-    room.playerIds.push(playerId);
-    room.playerSymbols[playerId] = 'o';
+    
+    // If there's a null slot (disconnected player), replace it
+    const disconnectedIndex = room.players.indexOf(null);
+    if (disconnectedIndex !== -1) {
+        room.players[disconnectedIndex] = ws;
+        room.playerIds[disconnectedIndex] = playerId;
+        room.playerSymbols[playerId] = disconnectedIndex === 0 ? 'x' : 'o';
+        players.set(ws, { playerId, roomId: room.id, playerSymbol: room.playerSymbols[playerId] });
+    } else {
+        // Normal join - add as second player
+        room.players.push(ws);
+        room.playerIds.push(playerId);
+        room.playerSymbols[playerId] = 'o';
+        players.set(ws, { playerId, roomId: room.id, playerSymbol: 'o' });
+    }
+    
     room.lastActivity = Date.now();
-
-    players.set(ws, { playerId, roomId: room.id, playerSymbol: 'o' });
 
     // Clear the incomplete room timeout since game is now full
     const timeoutId = roomTimeouts.get(room.id);

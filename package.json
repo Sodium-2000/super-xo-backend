@@ -1,0 +1,22 @@
+{
+    "name": "super-xo-backend",
+    "version": "1.0.0",
+    "description": "WebSocket server for Super XO online multiplayer",
+    "main": "server.js",
+    "type": "module",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "node --watch server.js"
+    },
+    "keywords": [
+        "websocket",
+        "game",
+        "multiplayer"
+    ],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "ws": "^8.18.0",
+        "uuid": "^9.0.1"
+    }
+}

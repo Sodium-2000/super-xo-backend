@@ -85,15 +85,15 @@ function handleMessage(ws, message) {
 
 function handleCheckRoom(ws, payload) {
     const { roomCode, playerId } = payload;
-    
+
     if (!roomCode || !playerId) {
         sendError(ws, 'Missing roomCode or playerId');
         return;
     }
-    
+
     // Find room by code
     const room = Array.from(rooms.values()).find(r => r.code === roomCode);
-    
+
     if (!room) {
         send(ws, {
             type: 'ROOM_CHECK_RESULT',
@@ -101,11 +101,11 @@ function handleCheckRoom(ws, payload) {
         });
         return;
     }
-    
+
     // Check if player was in this room
     const wasInRoom = room.playerIds.includes(playerId);
     const hasOpponent = room.players.some(p => p !== null && players.get(p)?.playerId !== playerId);
-    
+
     send(ws, {
         type: 'ROOM_CHECK_RESULT',
         payload: {
@@ -328,6 +328,9 @@ function handleMakeMove(ws, payload) {
         return;
     }
 
+    // Update game state on server
+    room.gameState.smallBoards[boardIndex].cells[cellIndex] = playerSymbol;
+
     // Update game state
     const move = {
         playedBy: playerSymbol,
@@ -394,7 +397,7 @@ function handleRestartGame(ws, payload) {
     room.restartApprovals.add(playerInfo.playerId);
 
     const activePlayers = room.players.filter(p => p !== null).length;
-    
+
     // If both players approved (or only one player in room), restart
     if (room.restartApprovals.size >= activePlayers) {
         // Reset game state
@@ -443,7 +446,7 @@ function handleLeaveRoom(ws) {
     if (room) {
         // Remove from disconnected players if present
         disconnectedPlayers.delete(playerInfo.playerId);
-        
+
         // Clear restart approvals
         if (room.restartApprovals) {
             room.restartApprovals.delete(playerInfo.playerId);

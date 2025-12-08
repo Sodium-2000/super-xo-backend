@@ -13,8 +13,15 @@ const players = new Map();
 // Store disconnected players: playerId -> { roomId, playerSymbol, disconnectedAt }
 const disconnectedPlayers = new Map();
 
+// Heartbeat tracking: ws -> timestamp
+const heartbeats = new Map();
+
 // Reconnection timeout (5 minutes)
 const RECONNECTION_TIMEOUT = 5 * 60 * 1000;
+
+// Heartbeat interval (30 seconds)
+const HEARTBEAT_INTERVAL = 30 * 1000;
+const HEARTBEAT_TIMEOUT = 35 * 1000; // Give 5 seconds grace period
 
 // Room cleanup timeouts
 const INCOMPLETE_ROOM_TIMEOUT = 10 * 60 * 1000; // 10 minutes for rooms with only 1 player
@@ -31,8 +38,32 @@ setInterval(() => {
     cleanupStaleRooms();
 }, CLEANUP_INTERVAL);
 
+// Heartbeat check - detect dead connections
+setInterval(() => {
+    const now = Date.now();
+    wss.clients.forEach((ws) => {
+        const lastHeartbeat = heartbeats.get(ws);
+        if (lastHeartbeat && (now - lastHeartbeat) > HEARTBEAT_TIMEOUT) {
+            console.log('Client failed heartbeat check - terminating');
+            ws.terminate();
+            return;
+        }
+        // Send ping
+        if (ws.readyState === 1) {
+            ws.ping();
+        }
+    });
+}, HEARTBEAT_INTERVAL);
+
 wss.on('connection', (ws) => {
     console.log('New client connected');
+    
+    // Initialize heartbeat
+    heartbeats.set(ws, Date.now());
+
+    ws.on('pong', () => {
+        heartbeats.set(ws, Date.now());
+    });
 
     ws.on('message', (data) => {
         try {
@@ -45,11 +76,13 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
+        heartbeats.delete(ws);
         handleDisconnect(ws);
     });
 
     ws.on('error', (error) => {
         console.error('WebSocket error:', error);
+        heartbeats.delete(ws);
     });
 });
 
@@ -248,35 +281,34 @@ function handleReconnect(ws, payload) {
         return;
     }
 
-    // Check if player has a disconnection record
-    const disconnectInfo = disconnectedPlayers.get(playerId);
-    if (!disconnectInfo) {
-        sendError(ws, 'No disconnection record found. Please create or join a new room.');
-        return;
-    }
-
-    const room = rooms.get(disconnectInfo.roomId);
-    if (!room || room.code !== roomCode) {
+    // Try to find the room by code
+    const room = Array.from(rooms.values()).find(r => r.code === roomCode);
+    
+    if (!room) {
         disconnectedPlayers.delete(playerId);
         sendError(ws, 'Room no longer exists. Please create or join a new room.');
         return;
     }
 
-    // Restore player connection
+    // Check if player is in this room
     const playerIndex = room.playerIds.indexOf(playerId);
     if (playerIndex === -1) {
         sendError(ws, 'Player not found in room');
         return;
     }
 
+    // Get player's symbol from room
+    const playerSymbol = playerIndex === 0 ? 'x' : 'o';
+
+    // Restore player connection
     room.players[playerIndex] = ws;
     players.set(ws, {
         playerId,
-        roomId: disconnectInfo.roomId,
-        playerSymbol: disconnectInfo.playerSymbol,
+        roomId: room.id,
+        playerSymbol: playerSymbol,
     });
 
-    // Remove from disconnected list
+    // Remove from disconnected list if exists
     disconnectedPlayers.delete(playerId);
 
     // Send current game state to reconnected player

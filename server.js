@@ -297,8 +297,8 @@ function handleReconnect(ws, payload) {
         return;
     }
 
-    // Get player's symbol from room
-    const playerSymbol = playerIndex === 0 ? 'x' : 'o';
+    // Get player's symbol from room (important: use playerSymbols map, not index!)
+    const playerSymbol = room.playerSymbols[playerId];
 
     // Restore player connection
     room.players[playerIndex] = ws;

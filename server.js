@@ -57,7 +57,7 @@ setInterval(() => {
 
 wss.on('connection', (ws) => {
     console.log('New client connected');
-    
+
     // Initialize heartbeat
     heartbeats.set(ws, Date.now());
 
@@ -283,7 +283,7 @@ function handleReconnect(ws, payload) {
 
     // Try to find the room by code
     const room = Array.from(rooms.values()).find(r => r.code === roomCode);
-    
+
     if (!room) {
         disconnectedPlayers.delete(playerId);
         sendError(ws, 'Room no longer exists. Please create or join a new room.');
@@ -318,7 +318,7 @@ function handleReconnect(ws, payload) {
             roomId: room.id,
             roomCode: room.code,
             playerId,
-            playerSymbol: disconnectInfo.playerSymbol,
+            playerSymbol: playerSymbol,
             gameState: room.gameState,
             currentTurn: room.currentTurn,
             activeBoard: room.activeBoard,
@@ -432,6 +432,25 @@ function handleRestartGame(ws, payload) {
 
     // If both players approved (or only one player in room), restart
     if (room.restartApprovals.size >= activePlayers) {
+        // Swap player roles - X becomes O and O becomes X
+        const swappedSymbols = {};
+        room.playerIds.forEach((pId) => {
+            const currentSymbol = room.playerSymbols[pId];
+            const newSymbol = currentSymbol === 'x' ? 'o' : 'x';
+            swappedSymbols[pId] = newSymbol;
+
+            // Update players map for this player
+            room.players.forEach((playerWs) => {
+                if (playerWs) {
+                    const info = players.get(playerWs);
+                    if (info && info.playerId === pId) {
+                        info.playerSymbol = newSymbol;
+                    }
+                }
+            });
+        });
+        room.playerSymbols = swappedSymbols;
+
         // Reset game state
         room.gameState = createInitialGameState();
         room.currentTurn = 'x';
@@ -439,15 +458,17 @@ function handleRestartGame(ws, payload) {
         room.lastActivity = Date.now();
         room.restartApprovals.clear();
 
-        // Notify all active players (skip null)
+        // Notify all active players with their new symbols (skip null)
         room.players.forEach((playerWs) => {
             if (playerWs !== null) {
+                const info = players.get(playerWs);
                 send(playerWs, {
                     type: 'GAME_RESTARTED',
                     payload: {
                         gameState: room.gameState,
                         currentTurn: room.currentTurn,
                         activeBoard: room.activeBoard,
+                        playerSymbol: info ? info.playerSymbol : 'x',
                     },
                 });
             }
@@ -657,7 +678,8 @@ function createInitialGameState() {
 
 function generateRoomCode() {
     // Generate a 6-character room code
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    // removed 0, O, L, I, to avoid misunderstanding / mis-reading
+    const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ123456789';
     let code = '';
     for (let i = 0; i < 6; i++) {
         code += chars.charAt(Math.floor(Math.random() * chars.length));
